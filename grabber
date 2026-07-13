@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+
+#############################################
+# CONFIG
+#############################################
+
+ROOTDIR="$(dirname "$0")"
+LIBDIR="$ROOTDIR/library"
+LOGDIR="$ROOTDIR/logs"
+JSONDIR="$ROOTDIR/json"
+DOCSDIR="$ROOTDIR/docs"
+GRAPHDIR="$ROOTDIR/graph"
+
+mkdir -p "$LIBDIR" "$LOGDIR" "$JSONDIR" "$DOCSDIR" "$GRAPHDIR"
+
+#############################################
+# NORMALIZATION FUNCTION
+#############################################
+
+normalize_script_vars() {
+    local file="$1"
+    local tmp="$(mktemp)"
+
+    sed \
+        -e 's/\bMODPATH\b/$1/g' \
+        -e 's/\bMODDIR\b/$1/g' \
+        -e 's/\bARCH\b/$2/g' \
+        -e 's/\bAPI\b/16/g' \
+        -e 's/\bapi\b/16/g' \
+        -e 's/\bANDROID_VERSION\b/16/g' \
+        -e 's/\bMAGISK_VERSION\b/30/g' \
+        -e 's/\bMAGISK\b/30/g' \
+        -e 's/\bSUPERUSER\b/true/g' \
+        -e 's/\bSU\b/true/g' \
+        "$file" > "$tmp"
+
+    mv "$tmp" "$file"
+}
+
+#############################################
+# FUNCTION 1 — ANALYZE WHOLE SCRIPT
+#############################################
+
+analyze_script() {
+    local file="$1"
+    local dir="$(basename "$(dirname "$file")")"
+    local base="$(basename "$file")"
+    local name="${base%.*}"
+    local ext="${base##*.}"
+
+    case "$name" in
+        post-fs-data) libname="${dir}_pfsd" ;;
+        service)      libname="${dir}_srv" ;;
+        system.prop)  libname="${dir}_sysprop" ;;
+        customize.sh) libname="${dir}_install" ;;
+        *)            libname="${dir}_${ext}" ;;
+    esac
+
+    local outfile="$LIBDIR/${libname}.sh"
+    local log="$LOGDIR/${libname}.log"
+    local json="$JSONDIR/${libname}.json"
+
+    > "$outfile"
+    > "$log"
+
+    echo "{ \"script\": \"$file\", \"variables\": [], \"functions\": [], \"requires\": [] }" > "$json"
+
+    local content
+    content="$(cat "$file")"
+
+    #############################################
+    # VARIABLES
+    #############################################
+
+    echo "# VARIABLES" >> "$outfile"
+    local vars
+    vars=$(echo "$content" | grep -o '^[A-Za-z_][A-Za-z0-9_]*=' | sort -u)
+
+    for v in $vars; do
+        echo "$v" >> "$outfile"
+        jq --arg v "$v" '.variables += [$v]' "$json" > "$json.tmp" && mv "$json.tmp" "$json"
+    done
+
+    #############################################
+    # FUNCTIONS
+    #############################################
+
+    echo -e "\n# FUNCTIONS" >> "$outfile"
+    local fns
+    fns=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*\s*`\(\)^\prime "$file" | sed ^\primes/().*//^\prime)
+
+    for fn in $fns; do
+        echo -e "\n# --- $fn ---" >> "$outfile"
+
+        local body
+        body="$(sed -n "/^$fn\s*()/,/^}/p" "$file")"
+        echo "$body" >> "$outfile"
+
+        local args reads calls
+
+        args=$(echo "$body" | grep -o ^\prime\$[0-9]\+^\prime | sort -u)
+        reads=$(echo "$body" | grep -o ^\prime\${\?[A-Za-z_][A-Za-z0-9_]*\}?^\prime)
+        reads=$(echo "$reads" | sed ^\primes/[${}]//g^\prime | sort -u)
+        calls=$(echo "$body" | grep -o ^\prime^[A-Za-z_][A-Za-z0-9_]*(^\prime | sed ^\primes/(//^\prime | sort -u)
+
+        echo "# args: ${args:-none}" >> "$outfile"
+        echo "# reads: ${reads:-none}" >> "$outfile"
+        echo "# calls: ${calls:-none}" >> "$outfile"
+
+        jq --arg fn "$fn" \
+           --argjson args "$(printf ^\prime%s\n^\prime $args | jq -R . | jq -s .)" \
+           --argjson reads "$(printf ^\prime%s\n^\prime $reads | jq -R . | jq -s .)" \
+           --argjson calls "$(printf ^\prime%s\n^\prime $calls | jq -R . | jq -s .)" \
+           ^\prime.functions += [{name:$fn,args:$args,reads:$reads,calls:$calls}]^\prime \
+           "$json" > "$json.tmp" && mv "$json.tmp" "$json"
+
+        echo "[FUNC] $fn analyzed" >> "$log"
+    done
+
+    #############################################
+    # REQUIRED FILES
+    #############################################
+
+    echo -e "\n# REQUIRED FILES" >> "$outfile"
+    local req
+    req=$(echo "$content" | grep -E ^\primesource|\. ^\prime | awk ^\prime{print $2}^\prime | sed ^\primes/"//g^\prime | sed "s/^\prime//g")
+
+    for r in $req; do
+        echo "_rr_${dir}_$(basename "$r")" >> "$outfile"
+        jq --arg r "$r" ^\prime.requires += [$r]^\prime "$json" > "$json.tmp" && mv "$json.tmp" "$json"
+        echo "[REQ] $r" >> "$log"
+    done
+
+    normalize_script_vars "$outfile"
+}
+
+#############################################
+# FUNCTION 2 — ANALYZE FUNCTIONS AND VARS
+#############################################
+
+analyze_functions_and_vars() {
+    local file="$1"
+    local lib="$LIBDIR/functions.sh"
+    local meta="$LIBDIR/metadata.json"
+    local log="$LOGDIR/functions.log"
+
+    mkdir -p "$LIBDIR" "$LOGDIR"
+    touch "$lib"
+    [ ! -f "$meta" ] && echo "{}" > "$meta"
+
+    local fns
+    fns=$(grep -E ^\prime^[A-Za-z_][A-Za-z0-9_]*\s*\(\)`' "$file" | sed 's/().*//')
+
+    for fn in $fns; do
+        local body
+        body="$(sed -n "/^$fn\s*()/,/^}/p" "$file")"
+
+        local args reads writes calls hash final count deps
+
+        args=$(echo "$body" | grep -o '\$[0-9]\+' | sort -u)
+        reads=$(echo "$body" | grep -o '\${\?[A-Za-z_][A-Za-z0-9_]*\}?')
+        reads=$(echo "$reads" | sed 's/[${}]//g' | sort -u)
+        writes=$(echo "$body" | grep -o '^[A-Za-z_][A-Za-z0-9_]*=' | sed 's/=//' | sort -u)
+        calls=$(echo "$body" | grep -o '^[A-Za-z_][A-Za-z0-9_]*(' | sed 's/(//' | sort -u)
+
+        hash=$(echo "$body" | sha256sum | awk '{print $1}')
+
+        if jq -e --arg h "$hash" '.[$h]' "$meta" >/dev/null 2>&1; then
+            echo "[SKIP] $fn — identical body" >> "$log"
+            continue
+        fi
+
+        count=$(grep -c "^$fn()" "$lib")
+        final="$fn"
+
+        if [ "$count" -gt 0 ]; then
+            final="${fn}_$((count+1))"
+            echo "[RENAME] $fn → $final" >> "$log"
+        fi
+
+        deps=""
+        for r in $reads; do
+            case "$r" in
+                [0-9]|@|\*|\#) ;;
+                *) deps="$deps $r" ;;
+            esac
+        done
+
+        if [ -n "$deps" ]; then
+            final="__${final}"
+            echo "[DEPS] $fn → $final (deps: $deps)" >> "$log"
+        fi
+
+        {
+            echo ""
+            echo "# Function: $final"
+            echo "$body" | sed "s/^$fn()/$final()/"
+        } >> "$lib"
+
+        jq --arg h "$hash" --arg n "$final" \
+           '.[$h] = {name: $n}' \
+           "$meta" > "$meta.tmp" && mv "$meta.tmp" "$meta"
+
+        echo "[ADD] $final saved" >> "$log"
+    done
+
+    normalize_script_vars "$lib"
+}
+
+#############################################
+# JSON REPORT GENERATOR
+#############################################
+
+generate_json_report() {
+    echo "[JSON] Reports stored in $JSONDIR"
+}
+
+#############################################
+# DEPENDENCY GRAPH (DOT FORMAT)
+#############################################
+
+generate_dependency_graph() {
+    local graph="$GRAPHDIR/functions.dot"
+    > "$graph"
+
+    echo "digraph functions {" >> "$graph"
+
+    for json in "$JSONDIR"/*.json; do
+        local funcs
+        funcs=$(jq -r '.functions[].name' "$json")
+
+        for fn in $funcs; do
+            local calls
+            calls=$(jq -r --arg fn "$fn" '.functions[] | select(.name==$fn) | .calls[]?' "$json")
+
+            for c in $calls; do
+                echo "  \"$fn\" -> \"$c\";" >> "$graph"
+            done
+        done
+    done
+
+    echo "}" >> "$graph"
+
+    echo "[GRAPH] Generated: $graph"
+}
+
+#############################################
+# DOCUMENTATION GENERATOR
+#############################################
+
+generate_docs() {
+    local doc="$DOCSDIR/functions.md"
+    > "$doc"
+
+    echo "# Function Documentation" >> "$doc"
+
+    for json in "$JSONDIR"/*.json; do
+        local script
+        script=$(jq -r '.script' "$json")
+
+        echo -e "\n## Script: $script" >> "$doc"
+
+        jq -r '.functions[].name' "$json" | while read fn; do
+            echo -e "\n### $fn" >> "$doc"
+            jq -r --arg fn "$fn" '.functions[] | select(.name==$fn)' "$json" | jq .
+        done
+    done
+
+    echo "[DOCS] Generated: $doc"
+}
+
+#############################################
+# RECURSIVE PROCESSOR
+#############################################
+
+process_all() {
+    mapfile -t FILES < <(find "$ROOTDIR" -type f -name "*.sh")
+
+    for f in "${FILES[@]}"; do
+        analyze_script "$f"
+        analyze_functions_and_vars "$f"
+    done
+
+    generate_json_report
+    generate_dependency_graph
+    generate_docs
+}
+
+#############################################
+# READY
+#############################################
+
+echo "Manager loaded. Use: process_all"
