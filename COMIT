@@ -17,6 +17,15 @@
 -E        grep -E "b(a|e)g" filename            # расширенные регулярные выражения (строки, содержащие "bag" или "beg")
 
 
+ls ~ | grep "^s"        # найдем строки, которые начинаются на символ "s"
+ls ~ | grep "\.txt$"    # найдем все файлы с расширением "txt"
+grep "T.m" test.txt     # Найдем в файле test.txt все строки, которые содержат "Tim" или "Tom"
+grep "T[ou]m" test.txt      # найдем все строки, которые содержат "Tum" или "Tom"
+grep "T[^ou]m" test.txt     # найдем все строки, которые НЕ содержат "Tum" или "Tom"
+grep "^0-9" test.txt        # найдем все строки, которые начинаются с цифрового символа
+ls ~/Downloads | grep "\.tar\.gz"       # найдем в папке загрузок все файлы, которые имеют расширение tar.gz
+grep "o\{2\}" test.txt      # найдем строки, где есть два буквы o подряд
+
 grep "pattern" file.txt             # Искать шаблон в файле
 grep "example" *.txt                # поиск строки "example" во всех файлах с расширением ".txt"
 grep -i "pattern" file.txt          # Поиск без учёта регистра
@@ -63,4 +72,10 @@ grep "done$" my.txt             # вывод всех строк, заканчи
 grep -o "begin.*end" my.txt     # вывод только совпадающей части строки (между "begin" и "end")
 grep --color "example" my.txt   # выделение найденных совпадений цветом
 grep "[0-9]" my.txt             # вывод всех строк, содержащих цифры
-grep -a "string" my.bin         # поиск строки "string" в бинарном файле "my.bin"
+		grep -a "string" my.bin         #поиск строки "string" в бинарном файле "my.bin"
+
+awk '{print $0}' file.txt                           # Вывести каждую строку файла
+awk '/pattern/ {print $0}' file.txt                # Вывести строки, соответствующие шаблону
+awk '{print $1}' file.txt                          # Вывести первый столбец каждой строки
+awk '{print $1, $3}' file.txt                      # Вывести первый и третий столбцы каждой строки
+awk 'BEGIN {print "Header"} {print $0} END {print "Footer"}' file.txt # Добавить заголовок и подвал
