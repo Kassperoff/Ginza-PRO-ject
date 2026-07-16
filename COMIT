@@ -1,0 +1,17 @@
+-c        grep -c "error" /var/log/syslog       # подсчитать количество совпадений
+-e        grep -e "linux$" filename             # использовать регулярные выражения (строки, заканчивающиеся на "Linux")
+-f        grep -f pattern_file.bashrc           # брать шаблоны (PATTERNS) из файла
+-i        grep -i "Alias" .bashrc               # игнорировать регистр при поиске
+-l        grep -l "alias" /home/test/*          # вывести только имена файлов, в которых найдены совпадения
+-L        grep -L "alias" /home/test/*          # вывести только имена файлов, в которых нет совпадений
+-r        grep -r "error" /var/log/log.txt      # рекурсивный поиск (внутри подкаталогов)
+-v        grep -v "warning" /home/test/log.txt  # выбирать строки, не содержащие совпадение
+-m        grep -m 3 "alias" .bashrc             # ограничить вывод результатов до 3 строк
+-n        grep -n "sudo" .bashrc                # вывести номера строк с совпадениями
+-o        grep -o "search string" .bashrc       # показывать только ту часть строки, которая совпадает с шаблоном
+-x        grep -x "linux is love" filename      # сопоставлять только целые строки
+-w        grep -w "alias" .bashrc               # сопоставлять только целые слова
+-A        grep -A 6 "error" error.log           # вывести 6 строк после совпадения
+-B        grep -B 2 "warning" error.log         # вывести 2 строки перед совпадением
+-C        grep -C 7 "info" error.log            # вывести 7 строк до и после совпадения
+-E        grep -E "b(a|e)g" filename            # расширенные регулярные выражения (строки, содержащие "bag" или "beg")
