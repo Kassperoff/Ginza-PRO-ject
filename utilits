@@ -1,0 +1,161 @@
+ui_print "Сообщение"           # Вывод в UI Magisk
+abort "Ошибка"                 # Прервать установку
+set_perm файл uid gid права    # Установить права
+set_perm_recursive dir ...     # Рекурсивные права
+resetprop свойство значение   # Установить свойство
+getprop свойство              # Получить свойство
+
+MAGISK_VER="26.4"          # Версия Magisk
+MAGISK_VER_CODE="26400"    # Код версии
+BOOTMODE="true"            # Режим загрузки
+MAGISKPATH="/sbin/.magisk" # Путь к Magisk
+MAGISK="/sbin/magisk"      # Бинарник Magisk
+BUSYBOX="/sbin/busybox"    # BusyBox
+ANDROID_ROOT="/system"     # Корень Android
+ANDROID_DATA="/data"       # Данные Android
+MODPATH="/out/module"      # Путь к модулю
+
+
+./grabber.sh module.zip
+./grabber.sh --interactive
+
+./magisk_emulator.sh module.zip
+./magisk_emulator.sh --interactive
+
+# Сделать все скрипты исполняемыми
+chmod +x *.sh
+
+# Запустить настройку (создаст директории и пример модуля)
+./setup.sh
+
+# Запустить главное меню
+source menu.sh
+
+/home/user/
+├── menu.sh                  # 🎯 Главное меню (интеграция всех инструментов)
+├── magisk_emulator.sh       # 🎭 Эмулятор Magisk для Linux
+├── grabber.sh               # 🔍 Анализатор модулей
+├── module_creator.sh        # 📦 Создание и упаковка модулей
+├── setup.sh                 # ⚙️ Настройка окружения
+├── README.md                # 📖 Полная документация
+└── [in/, out/, modules/, reports/, logs/, temp/]  # Рабочие директории
+
+./module_creator.sh --interactive
+./module_creator.sh create mymodule "My Module" 1.0 "Author" "Description"
+./module_creator.sh pack modules/mymodule
+
+#!/usr/bin/env bash
+ROOT="$(dirname "$0")"
+DB="$ROOT/../db/db.json"
+
+show_report() {
+    if [ -f "$DB" ]; then
+        echo -e "\n--- ОТЧЕТ АНАЛИЗА ---"
+        jq -r '. | "Модуль: \(.module)\nПеременные: \(.variables|length)\nФункции: \(.functions|length)\nВремя: \(.timestamp)"' "$DB"
+        echo "Переменные: $(jq -r '.variables[]' "$DB")"
+    else
+        echo "База пуста. Сначала запустите Grabber."
+    fi
+}
+
+while true; do
+    echo -e "\n--- Magisk Dev Manager ---"
+    echo "1. Run Emulator (MEMU)"
+    echo "2. Run Grabber (Analyze)"
+    echo "3. Run Packer (Zip)"
+    echo "4. Show Report"
+    echo "5. Exit"
+    read -p "Выберите: " opt
+
+    case $opt in
+        1) bash "$ROOT/memu.sh" ;;
+        2) bash "$ROOT/grabber.sh" ;;
+        3) bash "$ROOT/packer.sh" ;;
+        4) show_report ;;
+        5) break ;;
+        *) echo "Неверно." ;;
+    esac
+done
+
+#!/usr/bin/env bash
+# Сборщик архива
+BUILD_DIR="$(dirname "$0")/../source_build"
+DIST_DIR="$(dirname "$0")/../dist"
+mkdir -p "$DIST_DIR"
+
+if [ ! -f "$BUILD_DIR/module.prop" ]; then
+    echo "Ошибка: module.prop не найден в $BUILD_DIR"
+    exit 1
+fi
+
+NAME="module_$(date +%Y%m%d_%H%M).zip"
+cd "$BUILD_DIR" && zip -r "$DIST_DIR/$NAME" . > /dev/null
+
+echo "[Packer] Успешно собрано: $DIST_DIR/$NAME"
+
+
+#!/usr/bin/env bash
+# Анализатор скриптов модуля
+SRC="$(dirname "$0")/../source_work"
+DB="$(dirname "$0")/../db/db.json"
+mkdir -p "$(dirname "$DB")"
+
+echo "[Grabber] Анализ..."
+# Собираем данные через grep и формируем JSON через jq
+VARS=$(grep -rE '^[A-Za-z_][A-Za-z0-9_]*=' "$SRC" | cut -d: -f2 | sort -u | jq -R . | jq -s .)
+FUNCS=$(grep -rE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$SRC" | cut -d: -f2 | sort -u | jq -R . | jq -s .)
+
+jq -n --arg name "$(basename "$SRC")" \
+      --argjson vars "$VARS" \
+      --argjson funcs "$FUNCS" \
+      '{module: $name, variables: $vars, functions: $funcs, timestamp: now}' > "$DB"
+
+echo "[Grabber] Данные записаны в $DB"
+
+
+#!/usr/bin/env bash
+# Эмулятор среды Magisk
+WORKDIR="$(dirname "$0")/.."
+SRC="$WORKDIR/source_work"
+SANDBOX="$WORKDIR/sandbox"
+
+echo "[MEMU] Очистка и запуск эмуляции..."
+rm -rf "$SANDBOX" && mkdir -p "$SANDBOX/system" "$SANDBOX/bin"
+
+# Export переменных
+export MODPATH="$SANDBOX"
+export TMPDIR="$WORKDIR/tmp"
+export BOOTMODE=true
+export ARCH=arm64
+export API=33
+
+# Mocks
+ui_print() { echo -e "\e[32m[Magisk]\e[0m $1"; }
+set_perm() { echo -e "\e[33m[Perms]\e[0m $4 ($3)"; }
+export -f ui_print set_perm
+
+if [ -f "$SRC/customize.sh" ]; then
+    bash "$SRC/customize.sh"
+else
+    echo "Ошибка: customize.sh не найден в $SRC"
+fi
+
+
+magisk_dev/
+├── scripts/          # Сюда положи 4 скрипта ниже
+├── source_work/      # Сюда клади модуль для анализа и эмуляции
+├── source_build/     # Сюда клади файлы для упаковки
+├── sandbox/          # (Создастся само) Песочница для эмуляции
+├── dist/             # (Создастся само) Готовые .zip модули
+└── db/               # (Создастся само) База данных (db.json)Как пользоваться:
+Сделай все файлы исполняемыми: chmod +x scripts/*.sh.
+Положи файлы модуля в source_work/ для тестов.
+Положи готовые к дистрибуции файлы в source_build/.
+Запусти ./scripts/manager.sh.
+Почему это удобно:
+Изоляция: Ты можешь ковырять source_work (эмпирически подбирая логику), а source_build держать «чистым» для финальной сборки.
+Анализ: grabber полезен, если у тебя большая кодовая база модуля и ты забыл, какие переменные используешь.
+JSON-база: Если захочешь сделать веб-интерфейс или GUI для этого, у тебя уже есть структурированный формат данных (db.json).
+
+
+
